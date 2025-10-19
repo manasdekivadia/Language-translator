@@ -26,8 +26,6 @@ This project demonstrates **lexical analysis, parsing, AST design, and syntax-di
 | Simple `main()` function       | Flattened to top-level Python code                                                   |   |   |
 | Comments                       | `//` and `/* ... */` are ignored                                                     |   |   |
 
-**Not supported:** Classes, templates, pointers, references, STL, macros.
-
 ---
 
 ## Folder Structure
@@ -108,7 +106,6 @@ int main() {
 }
 ```
 
-> ⚠️ Remove preprocessor directives like `#include <iostream>` for now.
 
 ---
 
