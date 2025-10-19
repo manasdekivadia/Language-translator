@@ -1,5 +1,3 @@
----
-
 # C++ to Python Language Translator
 
 ## Overview
