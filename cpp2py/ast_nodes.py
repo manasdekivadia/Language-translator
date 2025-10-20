@@ -15,10 +15,8 @@ class Program(Node):
 
     def to_python(self, env=None, indent=0):
         env = env or {}
-        lines = []
-        for s in self.stmts:
-            lines.append(s.to_python(env, indent))
-        return '\n'.join(l for l in lines if l is not None and l != '')
+        lines = [s.to_python(env, indent) for s in self.stmts if s]
+        return '\n'.join(lines)
 
 class Block(Node):
     def __init__(self, stmts):
@@ -26,57 +24,59 @@ class Block(Node):
 
     def to_python(self, env=None, indent=0):
         env = env or {}
-        lines = []
-        for s in self.stmts:
-            code = s.to_python(env, indent)
-            if code:
-                lines.append(code)
+        lines = [s.to_python(env, indent) for s in self.stmts if s]
         return '\n'.join(lines)
 
+# ------------------ Variables ------------------
 class VarDecl(Node):
     def __init__(self, vtype, name, initializer=None):
-        self.vtype = vtype  # 'int', 'float', ...
+        self.vtype = vtype
         self.name = name
         self.initializer = initializer
 
     def to_python(self, env=None, indent=0):
-        if env is None: env = {}
+        env = env or {}
         env[self.name] = self.vtype
         indent_str = ' ' * (4 * indent)
         if self.initializer:
             value = self.initializer.to_python(env, 0)
             return f"{indent_str}{self.name} = {value}"
-        else:
-            # default initialization
-            if self.vtype in ('int',):
-                val = '0'
-            elif self.vtype in ('float', 'double'):
-                val = '0.0'
-            elif self.vtype in ('char', 'string'):
-                val = "''"
-            elif self.vtype == 'bool':
-                val = 'False'
-            else:
-                val = 'None'
-            return f"{indent_str}{self.name} = {val}"
+        default_map = {'int': '0', 'float': '0.0', 'double': '0.0',
+                       'char': "''", 'string': "''", 'bool': 'False'}
+        val = default_map.get(self.vtype, 'None')
+        return f"{indent_str}{self.name} = {val}"
+
+class ArrayDecl(Node):
+    def __init__(self, name, size, vtype='int', initializer=None):
+        self.name = name
+        self.size = size
+        self.vtype = vtype
+        self.initializer = initializer
+
+    def to_python(self, env=None, indent=0):
+        env = env or {}
+        env[self.name] = f"list[{self.vtype}]"
+        indent_str = ' ' * (4*indent)
+        if self.initializer:
+            init = self.initializer.to_python(env,0)
+            return f"{indent_str}{self.name} = {init}"
+        default_map = {'int': '0', 'float': '0.0', 'double': '0.0',
+                       'char': "''", 'string': "''", 'bool': 'False'}
+        val = default_map.get(self.vtype,'None')
+        return f"{indent_str}{self.name} = [{val}]*{self.size}"
 
 class Assign(Node):
-    def __init__(self, target, expr):
-        self.target = target  # string name
+    def __init__(self, target, expr, op='='):
+        self.target = target
         self.expr = expr
+        self.op = op  # supports +=, -=, etc.
 
     def to_python(self, env=None, indent=0):
         indent_str = ' ' * (4 * indent)
-        return f"{indent_str}{self.target} = {self.expr.to_python(env, 0)}"
+        rhs = self.expr.to_python(env,0)
+        return f"{indent_str}{self.target} {self.op} {rhs}"
 
-class ReturnStmt(Node):
-    def __init__(self, expr=None):
-        self.expr = expr
-
-    def to_python(self, env=None, indent=0):
-        # we will ignore return since top-level in python doesn't need return in main
-        return ''  # empty string
-
+# ------------------ Control Flow ------------------
 class IfStmt(Node):
     def __init__(self, cond, then_block: Block, else_block: Optional[Block]=None):
         self.cond = cond
@@ -85,21 +85,15 @@ class IfStmt(Node):
 
     def to_python(self, env=None, indent=0):
         env = env or {}
-        indent_str = ' ' * (4 * indent)
-        cond_py = self.cond.to_python(env, 0)
+        indent_str = ' ' * (4*indent)
+        cond_py = self.cond.to_python(env,0)
         then_py = self.then_block.to_python(env, indent+1)
         lines = [f"{indent_str}if {cond_py}:"]
-        if then_py.strip() == '':
-            lines.append(' ' * (4 * (indent+1)) + 'pass')
-        else:
-            lines.append(then_py)
+        lines.append(then_py if then_py.strip() else ' '*(4*(indent+1))+'pass')
         if self.else_block:
             else_py = self.else_block.to_python(env, indent+1)
             lines.append(f"{indent_str}else:")
-            if else_py.strip() == '':
-                lines.append(' ' * (4 * (indent+1)) + 'pass')
-            else:
-                lines.append(else_py)
+            lines.append(else_py if else_py.strip() else ' '*(4*(indent+1))+'pass')
         return '\n'.join(lines)
 
 class WhileStmt(Node):
@@ -108,195 +102,143 @@ class WhileStmt(Node):
         self.body = body
 
     def to_python(self, env=None, indent=0):
-        indent_str = ' ' * (4 * indent)
-        cond_py = self.cond.to_python(env, 0)
+        indent_str = ' '*(4*indent)
+        cond_py = self.cond.to_python(env,0)
         body_py = self.body.to_python(env, indent+1)
         lines = [f"{indent_str}while {cond_py}:"]
-        if body_py.strip() == '':
-            lines.append(' ' * (4 * (indent+1)) + 'pass')
-        else:
-            lines.append(body_py)
+        lines.append(body_py if body_py.strip() else ' '*(4*(indent+1))+'pass')
         return '\n'.join(lines)
 
 class ForStmt(Node):
     def __init__(self, init_stmt, cond_expr, iter_stmt, body: Block):
-        self.init_stmt = init_stmt  # VarDecl or Assign
+        self.init_stmt = init_stmt
         self.cond_expr = cond_expr
         self.iter_stmt = iter_stmt
         self.body = body
 
     def to_python(self, env=None, indent=0):
-        # Try to transform common C-style for loops to Python range
         env = env or {}
-        indent_str = ' ' * (4 * indent)
-        # Basic pattern: init: var = start ; cond: var < end ; iter: var++ or var += step
+        indent_str = ' '*(4*indent)
+        # Handle simple C-style loops
         try:
-            if isinstance(self.init_stmt, VarDecl) or isinstance(self.init_stmt, Assign):
-                # get var and start
-                if isinstance(self.init_stmt, VarDecl):
-                    var = self.init_stmt.name
-                    start = self.init_stmt.initializer.to_python(env, 0) if self.init_stmt.initializer else '0'
-                    env[var] = self.init_stmt.vtype
-                else:
-                    var = self.init_stmt.target
-                    start = self.init_stmt.expr.to_python(env, 0)
+            if isinstance(self.init_stmt, (VarDecl, Assign)):
+                var = self.init_stmt.name if isinstance(self.init_stmt, VarDecl) else self.init_stmt.target
+                start = self.init_stmt.initializer.to_python(env,0) if isinstance(self.init_stmt, VarDecl) else self.init_stmt.expr.to_python(env,0)
+                env[var] = 'int'
 
-                # cond: expect var < end  OR var <= end
-                cond = self.cond_expr
-                if isinstance(cond, BinaryOp) and isinstance(cond.left, Var) and cond.left.name == var and cond.op in ('<', '<='):
-                    end_expr = cond.right.to_python(env, 0)
-                    # determine range end adjustment for <=
-                    if cond.op == '<=':
-                        end = f"({end_expr}) + 1"
-                    else:
-                        end = end_expr
-
-                    # iter: var++ or var += N or var = var + N
+                if isinstance(self.cond_expr, BinaryOp) and isinstance(self.cond_expr.left, Var) and self.cond_expr.left.name==var:
+                    end = self.cond_expr.right.to_python(env,0)
                     step = '1'
-                    if isinstance(self.iter_stmt, UnaryOp) and self.iter_stmt.op == '++' and isinstance(self.iter_stmt.operand, Var) and self.iter_stmt.operand.name == var:
-                        step = '1'
-                    elif isinstance(self.iter_stmt, Assign) and self.iter_stmt.target == var:
-                        # try to detect var = var + k or var += k
-                        rhs = self.iter_stmt.expr
-                        # rhs expected as BinaryOp var + k
-                        if isinstance(rhs, BinaryOp) and rhs.left.name == var and rhs.op == '+':
-                            step = rhs.right.to_python(env, 0)
-                        else:
-                            step = '1'
-                    elif isinstance(self.iter_stmt, BinaryOp):  # maybe var += N encoded differently
-                        step = '1'
-                    # Build Python for
-                    header = f"for {var} in range({start}, {end}"
-                    if step != '1':
-                        header += f", {step}"
+                    if self.cond_expr.op == '<=': end = f"({end})+1"
+                    # detect decrement
+                    if isinstance(self.iter_stmt, UnaryOp) and self.iter_stmt.op=='--': step='-1'
+                    # detect var += k
+                    if isinstance(self.iter_stmt, Assign) and self.iter_stmt.op=='+=': step=self.iter_stmt.expr.to_python(env,0)
+                    header = f"for {var} in range({start},{end}"
+                    if step!='1': header += f", {step}"
                     header += "):"
                     body_py = self.body.to_python(env, indent+1)
-                    if body_py.strip() == '':
-                        body_py = ' ' * (4 * (indent+1)) + 'pass'
-                    return '\n'.join([indent_str + header, body_py])
-        except Exception:
-            pass
-        # Fallback: convert to while loop (emit init before)
-        parts = []
+                    if not body_py.strip(): body_py=' '*(4*(indent+1))+'pass'
+                    return '\n'.join([indent_str+header, body_py])
+        except Exception: pass
+        # fallback: while loop
         init_code = self.init_stmt.to_python(env, indent) if self.init_stmt else ''
-        if init_code:
-            parts.append(init_code)
-        cond_py = self.cond_expr.to_python(env, 0) if self.cond_expr else 'True'
+        cond_py = self.cond_expr.to_python(env,0) if self.cond_expr else 'True'
         body_py = self.body.to_python(env, indent+1)
         if self.iter_stmt:
-            # add iter at end of body
-            if body_py.strip() == '':
-                body_py = ' ' * (4 * (indent+1)) + 'pass'
-            body_py = body_py + '\n' + ' ' * (4 * (indent+1)) + self.iter_stmt.to_python(env, 0)
-        parts.append(f"{indent_str}while {cond_py}:")
-        parts.append(body_py)
-        return '\n'.join(parts)
+            body_py += '\n' + ' '*(4*(indent+1)) + self.iter_stmt.to_python(env,0)
+        return '\n'.join([init_code, f"{indent_str}while {cond_py}:", body_py])
 
+# ------------------ I/O ------------------
 class CoutStmt(Node):
-    def __init__(self, outputs: List[Node]):  # outputs are expressions or ENDL
+    def __init__(self, outputs: List[Node]):
         self.outputs = outputs
 
     def to_python(self, env=None, indent=0):
-        env = env or {}
-        indent_str = ' ' * (4 * indent)
-        items = []
-        newline = True
-        for o in self.outputs:
-            if isinstance(o, Endl):
-                newline = True
-            else:
-                items.append(o.to_python(env, 0))
-        if not items:
-            return indent_str + "print()"
-        joined = ', '.join(items)
-        return indent_str + f"print({joined})"
+        env=env or {}
+        indent_str=' '*(4*indent)
+        items=[o.to_python(env,0) for o in self.outputs if not isinstance(o,Endl)]
+        return indent_str+'print('+', '.join(items)+')' if items else indent_str+'print()'
 
 class CinStmt(Node):
     def __init__(self, targets: List[str]):
         self.targets = targets
 
     def to_python(self, env=None, indent=0):
-        env = env or {}
-        indent_str = ' ' * (4 * indent)
-        lines = []
+        env=env or {}
+        indent_str=' '*(4*indent)
+        lines=[]
         for t in self.targets:
-            typ = env.get(t, None)
-            if typ in ('int',):
-                lines.append(f"{indent_str}{t} = int(input())")
-            elif typ in ('float', 'double'):
-                lines.append(f"{indent_str}{t} = float(input())")
-            elif typ in ('char', 'string'):
-                lines.append(f"{indent_str}{t} = input()")
-            elif typ == 'bool':
-                # naive conversion
-                lines.append(f"{indent_str}{t} = input().lower() in ('1','true','yes') ")
-            else:
-                lines.append(f"{indent_str}{t} = input()")
+            typ=env.get(t,'')
+            if typ=='int': lines.append(f"{indent_str}{t} = int(input())")
+            elif typ in ('float','double'): lines.append(f"{indent_str}{t} = float(input())")
+            elif typ in ('char','string'): lines.append(f"{indent_str}{t} = input()")
+            elif typ=='bool': lines.append(f"{indent_str}{t} = input().lower() in ('1','true','yes')")
+            else: lines.append(f"{indent_str}{t} = input()")
         return '\n'.join(lines)
 
 class Endl(Node):
     def to_python(self, env=None, indent=0):
         return ''
 
-# Expression nodes
-class Expr(Node):
-    pass
+# ------------------ Expressions ------------------
+class Expr(Node): pass
 
 class Var(Expr):
-    def __init__(self, name):
-        self.name = name
-
-    def to_python(self, env=None, indent=0):
-        return self.name
+    def __init__(self,name): self.name=name
+    def to_python(self, env=None, indent=0): return self.name
 
 class Literal(Expr):
-    def __init__(self, value):
-        self.value = value
-
+    def __init__(self,value): self.value=value
     def to_python(self, env=None, indent=0):
-        if isinstance(self.value, str):
-            return self.value
-        elif isinstance(self.value, bool):
-            return 'True' if self.value else 'False'
-        else:
-            return repr(self.value)
+        if isinstance(self.value,str): return self.value
+        elif isinstance(self.value,bool): return 'True' if self.value else 'False'
+        return repr(self.value)
 
 class BinaryOp(Expr):
-    def __init__(self, left: Expr, op: str, right: Expr):
-        self.left = left
-        self.op = op
-        self.right = right
-
+    def __init__(self,left:Expr, op:str, right:Expr): self.left,self.op,self.right=left,op,right
     def to_python(self, env=None, indent=0):
-        left = self.left.to_python(env, 0)
-        right = self.right.to_python(env, 0)
-        # map C operators to Python
-        op = self.op
-        if op == '&&':
-            op = 'and'
-        elif op == '||':
-            op = 'or'
+        left=self.left.to_python(env,0)
+        right=self.right.to_python(env,0)
+        op=self.op
+        if op=='&&': op='and'
+        elif op=='||': op='or'
         return f"({left} {op} {right})"
 
-# aliases to match usages
-BinaryOpAlias = BinaryOp
-
 class UnaryOp(Expr):
-    def __init__(self, op, operand):
-        self.op = op
-        self.operand = operand
-
+    def __init__(self, op, operand): self.op,self.operand=op,operand
     def to_python(self, env=None, indent=0):
-        if self.op == '++':
-            # not a direct python op; caller should handle as part of for-loop or translate to var = var + 1
-            return f"{self.operand.to_python(env,0)} + 1"
-        elif self.op == '--':
-            return f"{self.operand.to_python(env,0)} - 1"
-        elif self.op == '-':
-            return f"-{self.operand.to_python(env,0)}"
-        else:
-            return f"{self.op}{self.operand.to_python(env,0)}"
+        if self.op=='++': return f"{self.operand.to_python(env,0)} + 1"
+        if self.op=='--': return f"{self.operand.to_python(env,0)} - 1"
+        if self.op=='-': return f"-{self.operand.to_python(env,0)}"
+        if self.op=='!': return f"not {self.operand.to_python(env,0)}"
+        return f"{self.op}{self.operand.to_python(env,0)}"
 
-# For simpler parser usage, expose names used in parser:
-BinaryOp = BinaryOp
-UnaryOp = UnaryOp
+# ------------------ Additional Statements ------------------
+class ReturnStmt(Node):
+    def __init__(self, expr=None): self.expr=expr
+    def to_python(self, env=None, indent=0): return ''
+
+class BreakStmt(Node):
+    def to_python(self, env=None, indent=0): return ' '*(4*indent)+'break'
+
+class ContinueStmt(Node):
+    def to_python(self, env=None, indent=0): return ' '*(4*indent)+'continue'
+
+class TernaryOp(Expr):
+    def __init__(self, cond, true_expr, false_expr):
+        self.cond,self.true_expr,self.false_expr=cond,true_expr,false_expr
+    def to_python(self, env=None, indent=0):
+        return f"({self.true_expr.to_python(env,0)} if {self.cond.to_python(env,0)} else {self.false_expr.to_python(env,0)})"
+
+class FuncDef(Node):
+    def __init__(self, name, params: List[str], body: Block):
+        self.name=name
+        self.params=params
+        self.body=body
+    def to_python(self, env=None, indent=0):
+        indent_str=' '*(4*indent)
+        param_str=', '.join(self.params)
+        body_py=self.body.to_python(env, indent+1)
+        if not body_py.strip(): body_py=' '*(4*(indent+1))+'pass'
+        return f"{indent_str}def {self.name}({param_str}):\n{body_py}"
